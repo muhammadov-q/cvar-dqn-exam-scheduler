@@ -1,3 +1,3 @@
-from env.study_env import StudyEnv
+from environment.study_env import StudyEnv
 
 __all__ = ["StudyEnv"]

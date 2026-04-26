@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from env.study_env import EnvConfig, StudyEnv
+from environment.study_env import EnvConfig, StudyEnv
 
 logger = logging.getLogger(__name__)
 
