@@ -1,0 +1,24 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Results (except examples)
+results/*.csv
+results/plots/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+CLAUDE.md
+
+# Environment
+.env
