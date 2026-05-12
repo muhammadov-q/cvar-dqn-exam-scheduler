@@ -20,6 +20,7 @@ from agents.value_iteration import ValueIterationAgent
 from agents.q_learning import QLearningAgent
 from agents.dqn import DQNAgent
 from agents.cvar_dqn import CVaRDQNAgent
+from agents.subject_cvar_dqn import SubjectCVaRDQNAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,6 +39,29 @@ def bootstrap_ci(data: list[float], n_bootstrap: int = 10000, alpha: float = 0.0
     lo = np.percentile(boot_means, 100 * alpha / 2)
     hi = np.percentile(boot_means, 100 * (1 - alpha / 2))
     return float(lo), float(hi)
+
+
+def make_row(config_name: str, agent_name: str, seed: int, result: dict) -> dict:
+    """Build a result row from an agent's evaluate() output.
+
+    Per-subject failure rates are serialized as a semicolon-joined
+    string so they fit cleanly in a CSV column.
+    """
+    ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
+    per_subj = result.get("per_subject_failure_rate", [])
+    return {
+        "config": config_name,
+        "agent": agent_name,
+        "seed": seed,
+        "mean_return": result["mean_total_reward"],
+        "std_return": result["std_total_reward"],
+        "mean_worst_exam": result["mean_worst_exam"],
+        "failure_rate": result["failure_rate"],
+        "cvar_10": result["cvar_10"],
+        "per_subject_failure_rate": ";".join(f"{x:.4f}" for x in per_subj),
+        "ci_lo": ci_lo,
+        "ci_hi": ci_hi,
+    }
 
 
 def run_experiment(
@@ -65,19 +89,7 @@ def run_experiment(
         for name, agent in heuristics.items():
             logger.info("Evaluating %s...", name)
             result = agent.evaluate(n_episodes=n_eval_episodes, seed=seed)
-            ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
-            rows.append({
-                "config": config_name,
-                "agent": name,
-                "seed": seed,
-                "mean_return": result["mean_total_reward"],
-                "std_return": result["std_total_reward"],
-                "mean_worst_exam": result["mean_worst_exam"],
-                "failure_rate": result["failure_rate"],
-                "cvar_10": result["cvar_10"],
-                "ci_lo": ci_lo,
-                "ci_hi": ci_hi,
-            })
+            rows.append(make_row(config_name, name, seed, result))
 
         # --- Value Iteration (small only) ---
         if config_name == "small":
@@ -85,16 +97,7 @@ def run_experiment(
             vi = ValueIterationAgent(env)
             vi.train()
             result = vi.evaluate(n_episodes=n_eval_episodes, seed=seed)
-            ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
-            rows.append({
-                "config": config_name, "agent": "ValueIteration", "seed": seed,
-                "mean_return": result["mean_total_reward"],
-                "std_return": result["std_total_reward"],
-                "mean_worst_exam": result["mean_worst_exam"],
-                "failure_rate": result["failure_rate"],
-                "cvar_10": result["cvar_10"],
-                "ci_lo": ci_lo, "ci_hi": ci_hi,
-            })
+            rows.append(make_row(config_name, "ValueIteration", seed, result))
 
         # --- Q-Learning (small and medium) ---
         if config_name in ("small", "medium"):
@@ -102,34 +105,15 @@ def run_experiment(
             ql = QLearningAgent(env)
             ql.train(n_episodes=n_train_episodes, seed=seed)
             result = ql.evaluate(n_episodes=n_eval_episodes, seed=seed)
-            ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
-            rows.append({
-                "config": config_name, "agent": "QLearning", "seed": seed,
-                "mean_return": result["mean_total_reward"],
-                "std_return": result["std_total_reward"],
-                "mean_worst_exam": result["mean_worst_exam"],
-                "failure_rate": result["failure_rate"],
-                "cvar_10": result["cvar_10"],
-                "ci_lo": ci_lo, "ci_hi": ci_hi,
-            })
+            rows.append(make_row(config_name, "QLearning", seed, result))
 
         # --- DQN ---
         logger.info("Training DQN...")
         dqn = DQNAgent(env)
         learning_curve = dqn.train(n_episodes=n_train_episodes, seed=seed)
         result = dqn.evaluate(n_episodes=n_eval_episodes, seed=seed)
-        ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
-        rows.append({
-            "config": config_name, "agent": "DQN", "seed": seed,
-            "mean_return": result["mean_total_reward"],
-            "std_return": result["std_total_reward"],
-            "mean_worst_exam": result["mean_worst_exam"],
-            "failure_rate": result["failure_rate"],
-            "cvar_10": result["cvar_10"],
-            "ci_lo": ci_lo, "ci_hi": ci_hi,
-        })
+        rows.append(make_row(config_name, "DQN", seed, result))
 
-        # Save learning curve
         lc_path = os.path.join(results_dir, f"learning_curve_dqn_{config_name}_seed{seed}.csv")
         pd.DataFrame({"episode": range(len(learning_curve)), "return": learning_curve}).to_csv(lc_path, index=False)
 
@@ -138,18 +122,19 @@ def run_experiment(
         cvar_dqn = CVaRDQNAgent(env)
         learning_curve = cvar_dqn.train(n_episodes=n_train_episodes, seed=seed)
         result = cvar_dqn.evaluate(n_episodes=n_eval_episodes, seed=seed)
-        ci_lo, ci_hi = bootstrap_ci(result["all_returns"])
-        rows.append({
-            "config": config_name, "agent": "CVaR-DQN", "seed": seed,
-            "mean_return": result["mean_total_reward"],
-            "std_return": result["std_total_reward"],
-            "mean_worst_exam": result["mean_worst_exam"],
-            "failure_rate": result["failure_rate"],
-            "cvar_10": result["cvar_10"],
-            "ci_lo": ci_lo, "ci_hi": ci_hi,
-        })
+        rows.append(make_row(config_name, "CVaR-DQN", seed, result))
 
         lc_path = os.path.join(results_dir, f"learning_curve_cvar_dqn_{config_name}_seed{seed}.csv")
+        pd.DataFrame({"episode": range(len(learning_curve)), "return": learning_curve}).to_csv(lc_path, index=False)
+
+        # --- Subject-Constrained CVaR-DQN (main novel contribution) ---
+        logger.info("Training Subject-Constrained CVaR-DQN...")
+        sc_cvar_dqn = SubjectCVaRDQNAgent(env)
+        learning_curve = sc_cvar_dqn.train(n_episodes=n_train_episodes, seed=seed)
+        result = sc_cvar_dqn.evaluate(n_episodes=n_eval_episodes, seed=seed)
+        rows.append(make_row(config_name, "SC-CVaR-DQN", seed, result))
+
+        lc_path = os.path.join(results_dir, f"learning_curve_sc_cvar_dqn_{config_name}_seed{seed}.csv")
         pd.DataFrame({"episode": range(len(learning_curve)), "return": learning_curve}).to_csv(lc_path, index=False)
 
     return pd.DataFrame(rows)

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from environment.study_env import EnvConfig, StudyEnv
 from agents.dqn import DQNAgent
 from agents.cvar_dqn import CVaRDQNAgent
+from agents.subject_cvar_dqn import SubjectCVaRDQNAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -90,6 +91,15 @@ def run_ablation(
             result = cvar.evaluate(n_episodes=n_eval, seed=seed)
             rows.append({
                 "ablation": ablation_name, "agent": "CVaR-DQN", "seed": seed,
+                **{k: v for k, v in result.items() if k != "all_returns"},
+            })
+
+            # SC-CVaR-DQN
+            sc = SubjectCVaRDQNAgent(env)
+            sc.train(n_episodes=n_train, seed=seed, verbose=False)
+            result = sc.evaluate(n_episodes=n_eval, seed=seed)
+            rows.append({
+                "ablation": ablation_name, "agent": "SC-CVaR-DQN", "seed": seed,
                 **{k: v for k, v in result.items() if k != "all_returns"},
             })
 

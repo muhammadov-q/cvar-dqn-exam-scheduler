@@ -9,9 +9,26 @@ __pycache__/
 dist/
 build/
 
-# Results (except examples)
+# Results (CSVs and plots are generated; commit only example artifacts)
 results/*.csv
 results/plots/
+
+# Logs (created by experiment scripts at runtime)
+logs/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+
+# Personal report draft (not for publication)
+report/report_personal.*
 
 # IDE
 .vscode/
@@ -19,6 +36,7 @@ results/plots/
 *.swp
 .DS_Store
 CLAUDE.md
+.claude/
 
-# Environment
+# Environment files
 .env

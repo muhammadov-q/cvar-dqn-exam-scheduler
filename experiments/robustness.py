@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from environment.study_env import EnvConfig, StudyEnv
 from agents.dqn import DQNAgent
 from agents.cvar_dqn import CVaRDQNAgent
+from agents.subject_cvar_dqn import SubjectCVaRDQNAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -45,12 +46,17 @@ def run_robustness(
         cvar = CVaRDQNAgent(train_env)
         cvar.train(n_episodes=n_train, seed=seed, verbose=False)
 
+        sc = SubjectCVaRDQNAgent(train_env)
+        sc.train(n_episodes=n_train, seed=seed, verbose=False)
+
+        trained = [("DQN", dqn), ("CVaR-DQN", cvar), ("SC-CVaR-DQN", sc)]
+
         # --- Test 1: Wider energy noise ---
         wide_noise_config = copy.deepcopy(base_config)
         wide_noise_config.energy_noise_range = [-2, -1, 0, 1, 2]
         test_env = StudyEnv(wide_noise_config)
 
-        for name, agent in [("DQN", dqn), ("CVaR-DQN", cvar)]:
+        for name, agent in trained:
             agent.env = test_env
             result = agent.evaluate(n_episodes=n_eval, seed=seed)
             rows.append({
@@ -68,7 +74,7 @@ def run_robustness(
         }
         test_env = StudyEnv(compressed_config)
 
-        for name, agent in [("DQN", dqn), ("CVaR-DQN", cvar)]:
+        for name, agent in trained:
             agent.env = test_env
             result = agent.evaluate(n_episodes=n_eval, seed=seed)
             rows.append({
@@ -83,7 +89,7 @@ def run_robustness(
         high_var_config.energy_noise_range = [-2, -1, 0, 1, 2]
         test_env = StudyEnv(high_var_config)
 
-        for name, agent in [("DQN", dqn), ("CVaR-DQN", cvar)]:
+        for name, agent in trained:
             agent.env = test_env
             result = agent.evaluate(n_episodes=n_eval, seed=seed)
             rows.append({
@@ -93,7 +99,7 @@ def run_robustness(
             agent.env = train_env
 
         # --- Control: Normal conditions ---
-        for name, agent in [("DQN", dqn), ("CVaR-DQN", cvar)]:
+        for name, agent in trained:
             result = agent.evaluate(n_episodes=n_eval, seed=seed)
             rows.append({
                 "test": "normal", "agent": name, "seed": seed,

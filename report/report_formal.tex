@@ -1,0 +1,419 @@
+\documentclass[a4paper,11pt]{article}
+
+%%% Pakete %%%
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage[utf8]{inputenc}
+\usepackage{enumerate}
+\usepackage{amsthm}
+\usepackage{amssymb}
+% paralist not installed in this TeX distribution; commented out
+% dsfont not installed; \mathds replaced with \mathbb
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{mathtools}
+\usepackage{verbatim}
+\usepackage{xcolor}
+% environ not installed; skipped
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{natbib}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+
+%%% Additional Commands %%%
+\newcommand{\N}{\ensuremath{\mathbb{N}}}
+\newcommand{\Z}{\ensuremath{\mathbb{Z}}}
+\newcommand{\Q}{\ensuremath{\mathbb{Q}}}
+\newcommand{\R}{\ensuremath{\mathbb{R}}}
+
+\newcommand{\states}{\ensuremath{\mathcal{S}}}
+\newcommand{\actions}{\ensuremath{\mathcal{A}}}
+\newcommand{\policy}{\ensuremath{\pi}}
+\newcommand{\stateval}{\ensuremath{v}}
+\newcommand{\actionval}{\ensuremath{q}}
+\newcommand{\optsval}{\ensuremath{v_*}}
+\newcommand{\optaval}{\ensuremath{q_*}}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{example}{Example}
+\theoremstyle{definition}
+\newtheorem{prob}{Exercise}
+\newtheorem{pcode}{Pseudocode}
+
+\graphicspath{{../results/plots/}}
+
+% -----------------------------
+\begin{document}
+
+%%% TITLE PAGE %%%
+\begin{titlepage}
+\pagestyle{empty}
+  \begin{minipage}[t]{0.6\textwidth}
+    \begin{flushleft}
+      \bf
+      Reinforcement Learning and Decision Making Under Uncertainty\\
+    \end{flushleft}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.3\textwidth}
+    \begin{flushright}
+      \bf Spring 2026\\
+      Kobiljon Muhammadov
+    \end{flushright}
+  \end{minipage}
+
+	\medskip
+
+  \begin{center}
+    {\Large\bf Project Report}
+
+    {\bf Risk-Sensitive Reinforcement Learning for Study Scheduling: A CVaR-DQN Approach}
+    \Large
+    \vspace{2cm}
+
+    {Group:}\\
+    {Kobiljon Muhammadov}
+
+    \vspace{2cm}
+    \begin{tabular}[b]{|l|r|}
+    \hline
+    Introduction, Related Work, Preliminaries &\qquad\qquad/\;\;5\\\hline
+    Structure, Notation, Formal correctness &\qquad\qquad/\;\;5\\\hline
+    Main Content and Explanations &\qquad\qquad/30\\\hline
+    Discussion \& Conclusion&\qquad\qquad/10\\\hline
+    $\Sigma$&\qquad\qquad/50\\\hline
+    \end{tabular}
+  \end{center}
+\end{titlepage}
+%%% END TITLE PAGE %%%
+
+\newpage
+\pagestyle{plain}
+\pagenumbering{arabic}
+
+\begin{abstract}
+We address optimal exam study scheduling using reinforcement learning. A student must allocate limited study days across multiple subjects, balancing knowledge acquisition against forgetting, energy constraints, and subject dependencies. Standard DQN maximizes expected total score but may sacrifice individual exams. We apply \textbf{CVaR-DQN}, a distributional RL method that optimizes the Conditional Value at Risk, to produce risk-sensitive schedules that protect against worst-case outcomes. We evaluate seven methods across three environment configurations: CVaR-DQN consistently improves CVaR$_{10\%}$ over DQN while sacrificing a small amount of mean return, exactly the trade-off the algorithm is designed to make. Ablation studies show energy stochasticity is the primary source of outcome variance, and removing it eliminates the mean--risk gap entirely. As a pilot, we explore \emph{Subject-Constrained CVaR-DQN}---a Multi-Objective Distributional Constrained MDP with per-subject CVaR constraints---which reduces Physics failure on Medium from 30\% to 8\% but underperforms on aggregate metrics and under distribution shift, motivating adaptive thresholding as future work.
+\end{abstract}
+
+% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+Students face a sequential decision problem when preparing for exams: which subject to study each day, given limited time, stochastic cognitive energy, and exponential forgetting. Standard reinforcement-learning agents maximize expected total score, which can lead to policies that sacrifice low-weight exams to inflate the aggregate. In practice, failing even one exam carries severe consequences. We apply \textbf{CVaR-DQN}---a distributional RL method that optimizes the Conditional Value at Risk \citep{chow2015,dabney2018}---to produce risk-sensitive study schedules that protect against worst-case outcomes, and additionally explore an extension that imposes per-subject constraints.\footnote{Code and experiment scripts: \url{https://github.com/muhammadov-q/cvar-dqn-exam-scheduler}}
+
+\paragraph{Related work.} RL has been applied to flashcard review timing \citep{reddy2017} and broader educational sequencing \citep{doroudi2019}. We build on DQN \citep{mnih2015} and Double DQN \citep{vanhasselt2016}, and extend QR-DQN \citep{dabney2018} with CVaR action selection \citep{chow2015}. Our pilot extension combines CMDP-style constrained optimization \citep{altman1999,achiam2017} with distributional RL by constraining per-subject CVaR.
+
+\paragraph{Contributions.} (i) A Gymnasium environment modeling exam scheduling with forgetting, energy, and prerequisites; (ii) a comparison of seven scheduling methods across three environment scales with ablation and robustness analyses; (iii) empirical evidence that CVaR-DQN consistently improves worst-case CVaR$_{10\%}$ over DQN at a small cost in mean return; (iv) a pilot study of \emph{Subject-Constrained CVaR-DQN}, a Multi-Objective Distributional Constrained MDP formulation, with positive and negative findings.
+
+% ============================================================
+\section{Preliminaries}
+\label{sec:problem}
+
+We model exam preparation as a finite-horizon MDP. The \textbf{state} is $s = (\mathbf{k}, e, d)$ where $\mathbf{k} \in \{0, \ldots, K\}^N$ is the knowledge vector across $N$ subjects, $e \in \{1, \ldots, E\}$ is energy, and $d \in \{1, \ldots, D\}$ is the current day. The \textbf{action} space is $a \in \{0, \ldots, N\}$: study subject $i$ or rest ($a = N$). Dynamics:
+\begin{align}
+    \text{Forgetting:} && k_i &\leftarrow \max(0, \lfloor k_i \cdot e^{-\lambda_i} \rfloor) \quad \forall i \neq a \label{eq:forgetting} \\
+    \text{Learning:}   && k_a &\leftarrow \min(K, k_a + \lfloor \tfrac{e}{E} g_{\max} (1 + \mathrm{bonus}(a)) \rfloor) \label{eq:learning} \\
+    \text{Energy:}     && e   &\leftarrow \mathrm{clip}(1, E,\; e - c_\text{study} + 1 + c_\text{rest} + \xi)
+\end{align}
+where $\lambda_i \in [0.05, 0.2]$ is the subject-specific forgetting rate, $\mathrm{bonus}(a) = \alpha \min_{p \in \mathrm{prereq}(a)} k_p/K$ when all prerequisites exceed threshold $\beta$ (zero otherwise), and $\xi \sim \mathrm{Uniform}\{-1, 0, +1\}$ is the energy noise. The \textbf{reward} is $r_{\text{step}} = -0.1$ per step plus an exam-day reward $r_{\text{exam}} = w_i \sigma(k_i - K/2)$ on subject $i$'s exam day, where $w_i$ is its credit weight and $\sigma$ is the sigmoid. The sigmoid maps zero knowledge to near-zero reward, $K/2$ knowledge to $0.5 w_i$, and mastery to $w_i$.
+
+\paragraph{Configurations.} Three configurations of increasing scale: \textbf{Small} ($N{=}3$, $K{=}5$, $D{=}7$; $\sim$7.6k states), \textbf{Medium} ($N{=}4$, $K{=}8$, $D{=}10$; $\sim$328k states), and \textbf{Large} ($N{=}5$, $K{=}10$, $D{=}14$; $\sim$11.3M states). All use $E = 5$.
+
+% ============================================================
+\section{Methods}
+\label{sec:methods}
+
+\paragraph{Baselines.} Three non-learning heuristics---\textbf{Uniform} (round-robin), \textbf{Most-Urgent-First} (next exam first), \textbf{Lowest-Knowledge-First}---and three learning baselines: \textbf{Value Iteration} (optimal on Small), \textbf{tabular $\epsilon$-greedy Q-Learning} (Small/Medium), and \textbf{DQN with Double DQN} \citep{mnih2015,vanhasselt2016}, a two-layer MLP (128 units, ReLU) with experience replay and target network.
+
+\paragraph{CVaR-DQN.} The main contribution. CVaR-DQN \citep{dabney2018} learns $M = 32$ quantile values $\{\theta_i(s, a)\}$ per action and selects actions by
+\begin{equation}
+    a^* = \arg\max_a \, \text{CVaR}_\alpha(s, a), \quad
+    \text{CVaR}_\alpha(s, a) = \frac{1}{\lceil \alpha M \rceil} \sum_{i=1}^{\lceil \alpha M \rceil} \theta_{(i)}(s, a),
+    \label{eq:cvar}
+\end{equation}
+with $\alpha = 0.1$ (worst 10\%). Training uses the quantile Huber loss \citep{dabney2018} with asymmetric weighting that pushes each quantile toward its target position in the distribution. Where DQN maximizes the \emph{average} outcome, CVaR-DQN maximizes the \emph{worst-case} outcome.
+
+\paragraph{Subject-Constrained CVaR-DQN (pilot).}\label{sec:sc_cvar_dqn} An extension that treats exam scheduling as a Multi-Objective Distributional Constrained MDP. Let $Z_i(s, a)$ be the return attributable to subject $i$ and define a passing threshold $T_i = \tfrac{1}{2} w_i$ (sigmoid midpoint, $\equiv$ knowing $K/2$). The ideal problem
+$\max_a \sum_i \mathbb{E}[Z_i(s, a)]$ s.t.\ $\text{CVaR}_\alpha(Z_i(s, a)) \geq T_i \;\forall i$
+is impractical to solve directly (often-empty feasible set destabilizes Bellman targets), so we use the Lagrangian relaxation
+\begin{equation}
+    a^* = \arg\max_a \; \sum_i \mathbb{E}[Z_i(s, a)] \; - \; \lambda \sum_i \bigl[\max(0, T_i - \text{CVaR}_\alpha(Z_i(s, a)))\bigr]^2.
+    \label{eq:sc_cvar_lagrangian}
+\end{equation}
+with $\lambda = 5$. The quantile network outputs $N \times M$ values per action (one distribution per subject); the quantile Huber loss is averaged across subjects, with per-step reward $r_i$ being the exam score for subject $i$.
+
+% ============================================================
+\section{Experiments and Results}
+\label{sec:experiments}
+
+\paragraph{Setup.} All RL agents are trained for 5{,}000 episodes and evaluated over 1{,}000 episodes across 5 seeds (42, 123, 456, 789, 1024). Metrics: \textbf{Mean Return} (average total reward), \textbf{CVaR$_{10\%}$} (mean of worst 10\% returns), \textbf{Mean Worst Exam} (lowest individual exam score per episode).
+
+\subsection{Main Results}
+
+\begin{table}[H]
+\centering
+\caption{Performance comparison across all configurations (mean over 5 seeds). Bold marks the best agent within each config for CVaR$_{10\%}$.}
+\label{tab:main_results}
+\begin{tabular}{llrrr}
+\toprule
+Config & Agent & Mean Return & CVaR$_{10\%}$ & Worst Exam \\
+\midrule
+Small
+& Uniform           & 0.68  & 0.03  & 0.20 \\
+& MUF               & 3.56  & 2.55  & 0.51 \\
+& LKF               & 0.76  & 0.22  & 0.15 \\
+& Value Iteration   & 5.00  & 3.44  & 0.15 \\
+& Q-Learning        & 2.85  & 1.80  & 0.27 \\
+& DQN               & \textbf{4.97}  & 3.37  & 0.15 \\
+& CVaR-DQN          & 4.85  & \textbf{3.48} & 0.15 \\
+& SC-CVaR-DQN       & 4.68  & 3.23  & 0.22 \\
+\midrule
+Medium
+& Uniform           & $-$0.71 & $-$0.78 & 0.04 \\
+& MUF               & 3.11    & 1.38    & 0.24 \\
+& LKF               & $-$0.48 & $-$0.72 & 0.04 \\
+& Q-Learning        & 1.47    & 0.59    & 0.21 \\
+& DQN               & \textbf{4.86}    & 2.86    & 0.04 \\
+& CVaR-DQN          & 4.50    & \textbf{3.19}    & 0.04 \\
+& SC-CVaR-DQN       & 4.53    & 2.40    & 0.04 \\
+\midrule
+Large
+& Uniform           & $-$1.05 & $-$1.29 & 0.02 \\
+& MUF               & 8.50    & 2.25    & 0.14 \\
+& LKF               & $-$0.88 & $-$1.25 & 0.02 \\
+& DQN               & \textbf{11.47}   & 8.25    & 0.01 \\
+& CVaR-DQN          & 10.62   & \textbf{8.27}    & 0.01 \\
+& SC-CVaR-DQN       & 11.19   & 8.10    & 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Key findings.} \textbf{DQN achieves the highest mean return} across all configurations, closely matching Value Iteration on Small (4.97 vs.\ 5.00). \textbf{CVaR-DQN consistently achieves higher CVaR$_{10\%}$}, confirming more robust schedules: on Medium, DQN gets 4.86 mean vs.\ CVaR-DQN's 4.50 ($-7\%$ mean) but CVaR$_{10\%}$ flips to 2.86 vs.\ 3.19 ($+12\%$ worst-case)---the mean-risk trade-off the algorithm is designed to make. SC-CVaR-DQN is competitive on mean return but underperforms on aggregate CVaR; we analyze its specific behavior in \S\ref{sec:pilot}. Among heuristics, Most-Urgent-First performs best. All three deep RL agents converge within $\sim$2{,}000 episodes (Appendix Figure~\ref{fig:learning}); a representative-config visualization (Medium) is in Figure~\ref{fig:comparison} (appendix).
+
+\subsection{Ablation Study}
+
+We ablate one component at a time on the medium configuration (Table~\ref{tab:ablation}, visual in appendix Figure~\ref{fig:ablation_supp}).
+
+\begin{table}[H]
+\centering
+\caption{Ablation results (medium config, mean over 5 seeds). Bold values mark the better agent within each row for CVaR$_{10\%}$.}
+\label{tab:ablation}
+\begin{tabular}{lrrrr}
+\toprule
+Ablation & \multicolumn{2}{c}{Mean Return} & \multicolumn{2}{c}{CVaR$_{10\%}$} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+         & DQN & CVaR-DQN & DQN & CVaR-DQN \\
+\midrule
+Baseline          & \textbf{4.79} & 4.50 & 2.91 & \textbf{3.19} \\
+No forgetting     & 5.63 & 5.59 & 4.34 & \textbf{4.95} \\
+Constant energy   & 7.01 & 7.01 & 7.01 & 7.01 \\
+No prerequisites  & \textbf{4.86} & 4.58 & 2.91 & \textbf{3.17} \\
+Equal weights     & 0.82 & 0.74 & \textbf{0.33} & 0.31 \\
+$\lambda = 0.05$  & \textbf{4.85} & 4.52 & 2.88 & \textbf{3.13} \\
+$\lambda = 0.2$   & 4.83 & 4.54 & 2.96 & \textbf{3.14} \\
+$\lambda = 0.4$   & 4.57 & 4.36 & \textbf{3.03} & 2.86 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\noindent\textbf{Constant energy} eliminates all variance: both agents achieve the deterministic optimum (7.01)---when energy noise is removed there is no risk to be sensitive to, confirming energy stochasticity is the sole source of uncertainty differentiating the two. \textbf{No forgetting} boosts both agents and grows CVaR-DQN's advantage (4.95 vs.\ 4.34). \textbf{High forgetting} ($\lambda=0.4$) is the only condition where DQN's CVaR exceeds CVaR-DQN's---rapid decay rewards aggressive late study over caution. \textbf{Prerequisites} have minimal effect.
+
+\subsection{Robustness Tests}
+
+We evaluate agents trained on normal conditions under three perturbations (Table~\ref{tab:robustness}, appendix Figure~\ref{fig:robustness_supp}).
+
+\begin{table}[H]
+\centering
+\caption{Robustness results (mean over 5 seeds). Bold values mark the best agent within each row for CVaR$_{10\%}$.}
+\label{tab:robustness}
+\begin{tabular}{lrrrrrr}
+\toprule
+Test & \multicolumn{3}{c}{Mean Return} & \multicolumn{3}{c}{CVaR$_{10\%}$} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+     & DQN & CVaR-DQN & SC-CVaR-DQN & DQN & CVaR-DQN & SC-CVaR-DQN \\
+\midrule
+Normal            & \textbf{4.86} & 4.50 & 4.53 & 2.90 & \textbf{3.19} & 2.40 \\
+Wide energy noise & \textbf{4.08} & 3.79 & 3.69 & \textbf{1.56} & 1.55 & 1.13 \\
+Compressed exams  & 2.76 & \textbf{2.92} & 1.89 & 0.80 & \textbf{1.34} & 0.30 \\
+High variance     & \textbf{4.07} & 3.56 & 3.52 & \textbf{1.54} & 1.27 & 1.09 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+Under \textbf{compressed exams}, CVaR-DQN maintains the highest CVaR$_{10\%}$ (1.34 vs.\ 0.80 for DQN)---its conservative strategy transfers naturally when exam clustering removes recovery slack. Under \textbf{wide energy noise} and \textbf{high variance} (doubled forgetting + wide noise), all three RL agents degrade; DQN retains slightly higher CVaR. \textbf{SC-CVaR-DQN does worse than both baselines under all perturbations}---the constraint thresholds $T_i$ are tuned to the training distribution, so the agent over-hedges against the wrong type of risk under shift.
+
+\subsection{Pilot: Subject-Constrained CVaR-DQN}
+\label{sec:pilot}
+
+We examine per-subject failures: Table~\ref{tab:per_subject} reports the fraction of episodes in which each subject's exam score falls below $T_i = 0.5 w_i$.
+
+\begin{table}[H]
+\centering
+\caption{Per-subject failure rate (fraction of episodes with exam score $< 0.5 w_i$, mean over 5 seeds). $\mathrm{S}_i$ = subject $i$; bold marks the lowest failure rate per subject among the three RL agents. ``---'' indicates the subject does not exist in this configuration.}
+\label{tab:per_subject}
+\begin{tabular}{llccccc}
+\toprule
+Config & Agent & $\mathrm{S}_0$ & $\mathrm{S}_1$ & $\mathrm{S}_2$ & $\mathrm{S}_3$ & $\mathrm{S}_4$ \\
+\midrule
+Small
+& Value Iteration & 0.00 & 0.08 & 1.00 & --- & --- \\
+& DQN             & \textbf{0.00} & \textbf{0.10} & 1.00 & --- & --- \\
+& CVaR-DQN        & 0.11 & 0.11 & 1.00 & --- & --- \\
+& SC-CVaR-DQN     & 0.02 & 0.16 & 1.00 & --- & --- \\
+\midrule
+Medium
+& DQN             & \textbf{0.04} & 0.30 & 1.00 & \textbf{0.50} & --- \\
+& CVaR-DQN        & 0.40 & 0.46 & 1.00 & \textbf{0.14} & --- \\
+& SC-CVaR-DQN     & \textbf{0.04} & \textbf{0.08} & 1.00 & 0.53 & --- \\
+\midrule
+Large
+& DQN             & \textbf{0.00} & \textbf{0.01} & 0.04 & 1.00 & 0.12 \\
+& CVaR-DQN        & 0.20 & 0.20 & \textbf{0.01} & 1.00 & \textbf{0.04} \\
+& SC-CVaR-DQN     & \textbf{0.00} & 0.05 & 0.02 & 1.00 & 0.13 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\paragraph{Diagnostic.} On every configuration, at least one subject fails 100\% of the time---and crucially, this holds \emph{even for Value Iteration}, the DP optimum. The lowest-weight subject ($w=2$: Subject 2 on Small/Medium, Subject 3 on Large) has maximum exam reward $\approx 1.85$, which is smaller than the marginal reward of spending those days on higher-weight subjects; the reward-optimal policy rationally sacrifices it.
+
+\paragraph{What SC-CVaR-DQN achieves.} The one positive: \textbf{on Medium, SC-CVaR-DQN reduces Physics failure (S$_1$) from 30\% (DQN) and 46\% (CVaR-DQN) to 8\%}---a 4--6$\times$ reduction---while Math failure stays low (0.04). This is the algorithm working as intended: the per-subject distributional forecast and Lagrangian penalty reallocate effort toward an at-risk-but-protectable subject.
+
+\paragraph{What it does \emph{not} achieve.} (i) Cannot protect environment-infeasible subjects: increasing $\lambda$ from 5 to 100 makes no difference. (ii) Underperforms on aggregate metrics: mean return below DQN's by $\sim 0.3$ on every config; CVaR$_{10\%}$ below both DQN and CVaR-DQN on Medium (2.40 vs 2.86 vs 3.19). (iii) Degrades under distribution shift (Table~\ref{tab:robustness})---thresholds tuned to the training distribution misfire when test conditions change. On a deliberately easy ``Fair'' configuration (equal weights, no forgetting, no prerequisites), DQN/CVaR-DQN reach 0\% any-failure while SC-CVaR-DQN sits at 2--3\%---the framework permits no-failing, and the algorithm is a small cost when no constraint actually binds.
+
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a risk-sensitive RL approach to exam study scheduling. CVaR-DQN consistently produces higher CVaR$_{10\%}$ than DQN across all three configurations, at a small cost in mean return---the mean-risk trade-off in finance. Ablations show that energy stochasticity is the dominant source of outcome variance (removing it makes DQN and CVaR-DQN identical), while forgetting affects difficulty level uniformly. The SC-CVaR-DQN pilot validates the formulation (per-subject distributional constraints are computable and trainable) and yields a clear positive (4--6$\times$ reduction in Physics failure on Medium) embedded in clear negatives (lower aggregate metrics, worse robustness, no help on environment-infeasible subjects). The root cause of the negatives is fixed thresholds---they neither adapt to environment dynamics nor to test-time distribution---and adaptive thresholding is the natural follow-up direction.
+
+\paragraph{Limitations \& future work.} The environment uses discrete knowledge levels and a uniform energy-noise model; real cognitive energy is autocorrelated and influenced by exogenous factors. A natural next step is to fit the energy and forgetting processes to \emph{real student data} (sleep-tracker logs, learning-platform telemetry) so the agent can be trained on empirically grounded dynamics. SC-CVaR-DQN training is $\sim$1.3$\times$ slower than CVaR-DQN due to the $N$-fold quantile output.
+
+% ============================================================
+\clearpage
+\bibliographystyle{plainnat}
+\renewcommand{\refname}{References}
+
+\begin{thebibliography}{9}
+
+\bibitem[Achiam et~al.(2017)]{achiam2017}
+J.~Achiam, D.~Held, A.~Tamar, and P.~Abbeel.
+\newblock Constrained policy optimization.
+\newblock In \emph{International Conference on Machine Learning}, 2017.
+
+\bibitem[Altman(1999)]{altman1999}
+E.~Altman.
+\newblock \emph{Constrained Markov Decision Processes}.
+\newblock Chapman \& Hall/CRC, 1999.
+
+\bibitem[Chow et~al.(2015)]{chow2015}
+Y.~Chow, A.~Tamar, S.~Mannor, and M.~Pavone.
+\newblock Risk-sensitive and robust decision-making via CVaR optimization in Markov decision processes.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2015.
+
+\bibitem[Dabney et~al.(2018)]{dabney2018}
+W.~Dabney, M.~Rowland, M.~Bellemare, and R.~Munos.
+\newblock Distributional reinforcement learning with quantile regression.
+\newblock In \emph{AAAI Conference on Artificial Intelligence}, 2018.
+
+\bibitem[Doroudi et~al.(2019)]{doroudi2019}
+S.~Doroudi, V.~Aleven, and E.~Brunskill.
+\newblock Where's the reward? A review of reinforcement learning for instructional sequencing.
+\newblock \emph{International Journal of Artificial Intelligence in Education}, 29(4):568--620, 2019.
+
+\bibitem[Ebbinghaus(1885)]{ebbinghaus1885}
+H.~Ebbinghaus.
+\newblock \emph{{\"U}ber das Ged{\"a}chtnis}.
+\newblock Duncker \& Humblot, Leipzig, 1885.
+
+\bibitem[Mnih et~al.(2015)]{mnih2015}
+V.~Mnih, K.~Kavukcuoglu, D.~Silver, et~al.
+\newblock Human-level control through deep reinforcement learning.
+\newblock \emph{Nature}, 518(7540):529--533, 2015.
+
+\bibitem[Reddy et~al.(2017)]{reddy2017}
+S.~Reddy, I.~Labutov, S.~Banerjee, and T.~Joachims.
+\newblock Unbounded human learning: Optimal scheduling for spaced repetition.
+\newblock In \emph{KDD}, 2017.
+
+\bibitem[Van~Hasselt et~al.(2016)]{vanhasselt2016}
+H.~Van~Hasselt, A.~Guez, and D.~Silver.
+\newblock Deep reinforcement learning with double Q-learning.
+\newblock In \emph{AAAI Conference on Artificial Intelligence}, 2016.
+
+\end{thebibliography}
+
+% ============================================================
+\clearpage
+\appendix
+\section{Supplementary Figures}
+\label{app:figures}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{\textwidth}
+        \includegraphics[width=\textwidth]{comparison_small.png}
+        \caption{Small configuration}
+    \end{subfigure}
+    \\
+    \begin{subfigure}[b]{\textwidth}
+        \includegraphics[width=\textwidth]{comparison_large.png}
+        \caption{Large configuration}
+    \end{subfigure}
+    \caption{Agent comparison on Small and Large configurations (the Medium-config version appears in the main text as Figure~\ref{fig:comparison}).}
+    \label{fig:comparison_supp}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.49\textwidth}
+        \includegraphics[width=\textwidth]{learning_curves_small.png}
+        \caption{Small}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \includegraphics[width=\textwidth]{learning_curves_medium.png}
+        \caption{Medium}
+    \end{subfigure}
+    \\[0.5em]
+    \begin{subfigure}[b]{0.49\textwidth}
+        \includegraphics[width=\textwidth]{learning_curves_large.png}
+        \caption{Large}
+    \end{subfigure}
+    \caption{Learning curves (mean $\pm$ std over 5 seeds) for DQN, CVaR-DQN, and SC-CVaR-DQN.}
+    \label{fig:learning}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{per_subject_failure.png}
+    \caption{Per-subject failure rate (mean $\pm$ std over 5 seeds), DQN vs.\ CVaR-DQN vs.\ SC-CVaR-DQN. Same data as Table~\ref{tab:per_subject}.}
+    \label{fig:per_subject_failure}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{radar.png}
+    \caption{Multi-dimensional profile of each RL agent per configuration. Subject axes show absolute pass rate ($1 - $ failure rate); aggregate axes (Mean Return, CVaR$_{10\%}$) are scaled so the best agent on each axis sits at 1. Universally-infeasible subjects are omitted. Larger enclosed area = better.}
+    \label{fig:radar}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{ablation.png}
+    \caption{Ablation study visual summary; same data as Table~\ref{tab:ablation}.}
+    \label{fig:ablation_supp}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{robustness.png}
+    \caption{Robustness tests visual summary; same data as Table~\ref{tab:robustness}.}
+    \label{fig:robustness_supp}
+\end{figure}
+
+\end{document}
