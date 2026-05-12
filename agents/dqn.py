@@ -230,9 +230,20 @@ class DQNAgent:
         return episode_returns
 
     def evaluate(self, n_episodes: int = 1000, seed: int = 42) -> dict:
-        """Evaluate the agent over multiple episodes (greedy policy)."""
+        """Evaluate the agent over multiple episodes (greedy policy).
+
+        A "failure" for subject i is defined as exam_score_i < 0.5 * w_i
+        (the sigmoid-midpoint threshold, equivalent to knowing K/2 of
+        the material). This is the same threshold used by the
+        Subject-Constrained CVaR-DQN agent, so per-subject failure
+        rates here are directly comparable.
+        """
         all_returns: list[float] = []
         all_worst_exam: list[float] = []
+        n_subjects = self.env.config.n_subjects
+        thresholds = np.array([0.5 * w for w in self.env.config.exam_weights])
+        per_subject_failures = np.zeros(n_subjects, dtype=np.int64)
+        any_failure_count = 0
         rng = np.random.default_rng(seed)
 
         for ep in range(n_episodes):
@@ -256,6 +267,14 @@ class DQNAgent:
             else:
                 all_worst_exam.append(0.0)
 
+            ep_failed = False
+            for i in range(n_subjects):
+                if exam_scores.get(i, 0.0) < thresholds[i]:
+                    per_subject_failures[i] += 1
+                    ep_failed = True
+            if ep_failed:
+                any_failure_count += 1
+
         returns_arr = np.array(all_returns)
         worst_arr = np.array(all_worst_exam)
         cutoff = int(np.ceil(len(returns_arr) * 0.1))
@@ -266,11 +285,8 @@ class DQNAgent:
             "mean_total_reward": float(np.mean(returns_arr)),
             "std_total_reward": float(np.std(returns_arr)),
             "mean_worst_exam": float(np.mean(worst_arr)),
-            "failure_rate": float(np.mean(
-                worst_arr < min(self.env.config.exam_weights) / (
-                    1.0 + np.exp(-(1 - self.env.config.max_knowledge / 2.0))
-                )
-            )),
+            "failure_rate": float(any_failure_count / n_episodes),
+            "per_subject_failure_rate": (per_subject_failures / n_episodes).tolist(),
             "cvar_10": cvar_10,
             "all_returns": all_returns,
         }

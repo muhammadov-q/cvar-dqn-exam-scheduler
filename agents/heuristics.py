@@ -32,6 +32,10 @@ class BaseAgent(ABC):
         """
         all_returns: list[float] = []
         all_worst_exam: list[float] = []
+        n_subjects = self.env.config.n_subjects
+        thresholds = np.array([0.5 * w for w in self.env.config.exam_weights])
+        per_subject_failures = np.zeros(n_subjects, dtype=np.int64)
+        any_failure_count = 0
         rng = np.random.default_rng(seed)
 
         for ep in range(n_episodes):
@@ -55,6 +59,14 @@ class BaseAgent(ABC):
             else:
                 all_worst_exam.append(0.0)
 
+            ep_failed = False
+            for i in range(n_subjects):
+                if exam_scores.get(i, 0.0) < thresholds[i]:
+                    per_subject_failures[i] += 1
+                    ep_failed = True
+            if ep_failed:
+                any_failure_count += 1
+
         returns_arr = np.array(all_returns)
         worst_arr = np.array(all_worst_exam)
         alpha = 0.1
@@ -66,11 +78,8 @@ class BaseAgent(ABC):
             "mean_total_reward": float(np.mean(returns_arr)),
             "std_total_reward": float(np.std(returns_arr)),
             "mean_worst_exam": float(np.mean(worst_arr)),
-            "failure_rate": float(np.mean(
-                worst_arr < min(self.env.config.exam_weights) / (
-                    1.0 + np.exp(-(1 - self.env.config.max_knowledge / 2.0))
-                )
-            )),
+            "failure_rate": float(any_failure_count / n_episodes),
+            "per_subject_failure_rate": (per_subject_failures / n_episodes).tolist(),
             "cvar_10": cvar_10,
             "all_returns": all_returns,
         }
