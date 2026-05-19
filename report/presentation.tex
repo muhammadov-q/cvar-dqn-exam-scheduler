@@ -1,0 +1,296 @@
+\documentclass[aspectratio=169,11pt]{beamer}
+
+% ---- clean, modern, dependency-light look ----
+\usetheme{default}
+\usefonttheme{professionalfonts}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\graphicspath{{../results/plots/}}
+
+\setbeamertemplate{navigation symbols}{}
+
+% palette
+\definecolor{ink}{RGB}{28,38,56}
+\definecolor{accent}{RGB}{0,104,168}
+\definecolor{accent2}{RGB}{192,57,43}
+\definecolor{good}{RGB}{34,110,55}
+\definecolor{soft}{RGB}{244,247,250}
+
+\setbeamercolor{normal text}{fg=ink}
+\setbeamercolor{frametitle}{fg=accent,bg=}
+\setbeamercolor{title}{fg=ink}
+\setbeamercolor{structure}{fg=accent}
+\setbeamercolor{block title}{fg=white,bg=accent}
+\setbeamercolor{block body}{fg=ink,bg=soft}
+\setbeamerfont{frametitle}{series=\bfseries,size=\large}
+\setbeamerfont{title}{series=\bfseries,size=\Large}
+\setbeamertemplate{itemize item}{\color{accent}\textbullet}
+\setbeamertemplate{itemize subitem}{\color{accent}--}
+
+% flat frametitle with a thin rule, generous padding
+\setbeamertemplate{frametitle}{%
+  \vspace{6pt}\hspace{6pt}{\usebeamerfont{frametitle}\insertframetitle}%
+  \vspace{2pt}\par%
+  {\color{accent}\hrule height 1.5pt}%
+  \vspace{-2pt}%
+}
+% minimal footer: short title (left) -- page (right)
+\setbeamertemplate{footline}{%
+  \hbox{}\vspace{-4pt}%
+  \hspace{8pt}{\color{ink!55}\scriptsize CVaR-DQN Exam Scheduler}%
+  \hfill{\color{ink!55}\scriptsize \insertframenumber/\inserttotalframenumber}%
+  \hspace{8pt}\vspace{4pt}%
+}
+
+\newcommand{\hl}[1]{{\color{accent}\textbf{#1}}}
+\newcommand{\win}[1]{{\color{good}\textbf{#1}}}
+\newcommand{\bad}[1]{{\color{accent2}\textbf{#1}}}
+
+\title{Risk-Sensitive RL for Study Scheduling}
+\subtitle{A CVaR-DQN Approach}
+\author{Kobiljon Muhammadov}
+\institute{RL and Decision Making Under Uncertainty --- Spring 2026}
+\date{}
+
+\begin{document}
+
+% ---------- 1. Title (~10s) ----------
+{\setbeamertemplate{footline}{}
+\begin{frame}
+  \vfill
+  {\color{accent}\rule{\textwidth}{2pt}}\\[4pt]
+  {\usebeamerfont{title}\color{ink}\inserttitle}\\[2pt]
+  {\large\color{accent}\insertsubtitle}\\[10pt]
+  {\insertauthor \hfill \insertinstitute}\\[4pt]
+  {\color{accent}\rule{\textwidth}{2pt}}
+  \vfill
+  \begin{center}\itshape\color{ink!70}
+  Goal: schedule study days so the student does not fail \emph{any} exam.
+  \end{center}
+  \vfill
+\end{frame}}
+
+% ---------- 2. Problem (~50s) ----------
+\begin{frame}{The Problem}
+  A student has \hl{$D$ days} before exams. Each day: study \emph{one} subject, or rest.
+  \begin{itemize}
+    \item \hl{Forgetting:} unstudied subjects decay (Ebbinghaus curve).
+    \item \hl{Energy:} random day-to-day; low energy $\Rightarrow$ learn less.
+    \item \hl{Weights:} exams carry different credit $w_i$.
+  \end{itemize}
+  \vspace{0.8em}
+  \begin{block}{The tension --- our research question}
+    Maximising the \emph{average} score makes the optimal policy
+    \bad{sacrifice a low-weight subject}. But a student cares about
+    \win{not failing \emph{any} exam}. We need \hl{risk-sensitive} RL.
+  \end{block}
+\end{frame}
+
+% ---------- 3. Environment (~50s) ----------
+\begin{frame}{The Environment $=$ a Markov Decision Process}
+  \hl{State} $s=(\mathbf{k},e,d)$: knowledge per subject, energy, day.\quad
+  \hl{Action} $a$: study a subject, or rest.
+  \vspace{0.6em}
+  \[
+  \underbrace{k_i \leftarrow \lfloor k_i e^{-\lambda_i}\rfloor}_{\textbf{forget}}\qquad
+  \underbrace{k_a \leftarrow k_a + \lfloor \tfrac{e}{E}\,g_{\max}\rfloor}_{\textbf{learn}}\qquad
+  \underbrace{r = w_i\,\sigma(k_i-\tfrac{K}{2})}_{\textbf{exam reward}}
+  \]
+  \vspace{0.4em}
+  \begin{itemize}
+    \item Sigmoid reward: knowing $K/2$ $\Rightarrow$ exactly half credit $0.5\,w_i$.
+    \item Energy noise $\xi\!\sim\!\mathrm{Uniform}\{-1,0,+1\}$ is the \emph{only} randomness.
+    \item Three scales: Small / Medium / Large ($\sim$7.5k / 328k / 11M states).
+  \end{itemize}
+\end{frame}
+
+% ---------- 4. Core idea + figure (~65s) ----------
+\begin{frame}{Core Idea: Optimise the Worst Case, Not the Average}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \footnotesize
+      \hl{DQN} learns one number: the mean.\\[0.3em]
+      \hl{CVaR-DQN} learns the \emph{whole return distribution}
+      ($M{=}32$ quantiles) and acts on the bad tail:
+      \[
+        a^{*}=\arg\max_a\ \
+        \underbrace{\frac{1}{\lceil\alpha M\rceil}
+        \sum_{i=1}^{\lceil\alpha M\rceil}\theta_{(i)}}
+        _{\textstyle \mathrm{CVaR}_\alpha}
+      \]
+      $\theta_{(i)}$: $i$-th \emph{worst} return\,;\;
+      $\lceil\alpha M\rceil$: \# tail quantiles ($3$ of $32$)\,;\;
+      $\alpha{=}0.1$.\\[0.4em]
+      $\Rightarrow$ \textbf{average of the worst 10\% of outcomes.}\\[0.7em]
+      DQN: ``best on \emph{average}?''\\
+      CVaR-DQN: ``best when I'm \emph{unlucky}?''
+    \end{column}
+    \begin{column}{0.52\textwidth}
+      \vspace{1.5em}
+      \includegraphics[width=\textwidth]{cvar_concept.png}\\[0.4em]
+      \centering\footnotesize
+      Failing one exam \emph{is} a worst-case event.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------- 5. Methods (~40s) ----------
+\begin{frame}{Methods Compared}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \textbf{Baselines}
+      \begin{itemize}
+        \item 3 heuristics (Uniform, MUF, LKF)
+        \item Value Iteration --- exact optimum (Small)
+        \item Tabular Q-learning
+        \item DQN $+$ Double DQN
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \textbf{Contributions}
+      \begin{itemize}
+        \item \hl{CVaR-DQN} --- risk-sensitive
+        \item \hl{SC-CVaR-DQN} --- per-subject constrained \emph{(pilot)}
+      \end{itemize}
+      \vspace{1.2em}
+      {\footnotesize 5 seeds $\times$ 5k train / 1k eval episodes each.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------- 6. Main result (~60s) ----------
+\begin{frame}{Main Result: the Mean--Risk Trade-off}
+  \begin{center}
+  \begin{tabular}{llrr}
+    \toprule
+    Config & Agent & Mean Return & CVaR$_{10\%}$ \\
+    \midrule
+    Small  & Value Iteration & \textit{5.00} & \textit{3.44} \\
+    Small  & DQN             & 4.97 & 3.37 \\
+    \midrule
+    Medium & DQN             & \textbf{4.86} & 2.86 \\
+    Medium & CVaR-DQN        & 4.50 & \bad{3.19} \\
+    \midrule
+    Large  & DQN             & \textbf{11.47} & 8.25 \\
+    Large  & CVaR-DQN        & 10.62 & \bad{8.27} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.4em}
+  \begin{block}{The contribution, in one line}
+    DQN $4.97\!\approx\!$ VI optimum $5.00$ (it \emph{found} the optimum).
+    On Medium: trade \bad{7\% average} for \win{12\% better worst-case}
+    --- the finance mean--risk principle, realised.
+  \end{block}
+\end{frame}
+
+% ---------- 7. Pilot + figure (~65s) ----------
+\begin{frame}{Pilot: Subject-Constrained CVaR-DQN (honest findings)}
+  Constrain \emph{each subject $i$} ($Z_i$ = its return, $T_i$ = its pass bar):
+  \vspace{-0.2em}
+  \[
+    a^{*}=\arg\max_a\ \
+    \underbrace{\sum_i\mathbb{E}[Z_i]}_{\text{maximise total reward}}
+    \ -\ \lambda
+    \underbrace{\sum_i\big[\max(0,\ T_i-\mathrm{CVaR}_\alpha(Z_i))\big]^2}
+    _{\text{penalty if any subject's worst case is below its bar}}
+  \]
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \footnotesize
+      \vspace{0.3em}
+      \win{Win:} Medium Physics failure
+      $30\%\!\to\!\mathbf{8\%}$ (4--6$\times$).\\[0.5em]
+      \bad{Honest losses:} lower aggregate CVaR; worse under shift;
+      cannot help \emph{infeasible} subjects.\\[0.7em]
+      \textbf{Key insight:} the lowest-weight subject fails 100\%
+      \emph{even for Value Iteration} --- an \hl{environment property},
+      not an algorithm flaw.
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \includegraphics[width=\textwidth]{per_subject_failure.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------- 8. Takeaways (~30s) ----------
+\begin{frame}{Takeaways}
+  \begin{enumerate}
+    \item \hl{CVaR-DQN works:} consistently better worst-case than DQN,
+          at a small cost in mean --- the mean--risk trade-off.
+    \item \hl{Energy noise is everything:} the constant-energy ablation
+          makes DQN $=$ CVaR-DQN. It is the sole source of risk.
+    \item \hl{The pilot is an honest mixed result:} one clear win, clear
+          failure modes, one concrete next step --- \emph{adaptive thresholds}.
+  \end{enumerate}
+  \vfill
+  \begin{center}
+    {\Large\color{accent}\textbf{Thank you --- Questions?}}\\[0.4em]
+    {\footnotesize\texttt{github.com/muhammadov-q/cvar-dqn-exam-scheduler}}
+  \end{center}
+\end{frame}
+
+% ===================== BACKUP =====================
+\appendix
+{\setbeamertemplate{footline}{\hfill{\color{ink!40}\scriptsize backup}\hspace{8pt}\vspace{4pt}}
+
+\begin{frame}{Backup: Ablation --- proof the mechanism is \emph{risk}}
+  \begin{center}\small
+  \begin{tabular}{lrrrr}
+    \toprule
+    Ablation (Medium) & DQN mean & CVaR mean & DQN CVaR & CVaR-DQN CVaR\\
+    \midrule
+    Baseline         & 4.79 & 4.50 & 2.91 & \bad{3.19}\\
+    \textbf{Constant energy} & \textbf{7.01} & \textbf{7.01} & \textbf{7.01} & \textbf{7.01}\\
+    No forgetting    & 5.63 & 5.59 & 4.34 & \bad{4.95}\\
+    $\lambda{=}0.4$  & 4.57 & 4.36 & \textbf{3.03} & 2.86\\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.5em}
+  Remove the energy noise $\Rightarrow$ the environment is deterministic
+  $\Rightarrow$ there is \emph{no risk} $\Rightarrow$ DQN and CVaR-DQN become
+  \hl{identical} (both 7.01). This \emph{proves} the difference between them
+  is genuinely risk-sensitivity, not training noise.
+\end{frame}
+
+\begin{frame}{Backup: Why $M=32$ quantiles?}
+  \begin{itemize}
+    \item Standard distributional-RL default; sets distribution resolution.
+    \item With $\alpha{=}0.1$: $\lceil 0.1{\times}32\rceil = 3$ tail quantiles
+          --- enough for a \emph{stable} CVaR average, not a single noisy point.
+    \item Too small ($M{=}10\Rightarrow$ 1 tail point $=$ noisy, that's VaR not CVaR);
+          too big ($M{=}200$) $=$ overkill, slower, bigger per-subject net.
+    \item Not exhaustively swept --- a principled default, not a tuned optimum.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Backup: Why the \emph{quadratic} Lagrangian penalty?}
+  \begin{itemize}
+    \item Hard constraint $\Rightarrow$ feasible set empty early in training
+          $\Rightarrow$ discontinuous Bellman target $\Rightarrow$ unstable.
+    \item Lagrangian relaxation makes the objective continuous.
+    \item \emph{Quadratic}, not linear: when all actions violate, a linear
+          penalty is a near-constant offset that doesn't differentiate
+          actions; squaring amplifies relative differences so the
+          least-bad action wins.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Backup: CVaR vs Variance vs VaR}
+  \begin{itemize}
+    \item \textbf{Variance} punishes good surprises too; CVaR only the downside.
+    \item \textbf{VaR} $=$ just the cutoff quantile; ignores how bad the tail
+          is beyond it; non-convex, hard to optimise.
+    \item \textbf{CVaR} $=$ average of the whole tail; coherent, convex,
+          matches ``how bad on average when it goes wrong''.
+  \end{itemize}
+\end{frame}
+}
+
+\end{document}

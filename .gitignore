@@ -26,6 +26,9 @@ logs/
 *.fls
 *.bbl
 *.blg
+*.nav
+*.snm
+*.vrb
 
 # Personal report draft (not for publication)
 report/report_personal.*
